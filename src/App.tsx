@@ -1,77 +1,219 @@
-import {BrowserRouter as Router, Route, Routes} from 'react-router-dom';
-import {PublicClientApplication, Configuration, RedirectRequest} from '@azure/msal-browser';
-import {MsalProvider} from '@azure/msal-react';
-import React, {useState} from 'react';
-import './App.css';
-import Dashboard from './Dashboard';
+import React, {useEffect, useState} from "react";
+import { PublicClientApplication, AuthenticationResult, SilentRequest, Configuration } from "@azure/msal-browser";
+import { Box, Button, TextareaAutosize, Typography, Paper, IconButton, ThemeProvider, createTheme, TextField } from "@mui/material";
+import Grid from "@mui/material/Grid2";
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
-type Environment = 'DEV' | 'QA' | 'PROD';
+const App: React.FC = () => {
+    const [idToken, setIdToken] = useState<string>("");
+    const [accessToken, setAccessToken] = useState<string>("");
+    const [newIdToken, setNewIdToken] = useState<string>("");
+    const [clientId, setClientId] = useState<string>("");
+    const [tenantId, setTenantId] = useState<string>("");
+    const [pca, setPca] = useState<PublicClientApplication | null>(null);
 
-const environments: Record<Environment, { clientId: string; tenantId: string }> = {
-    DEV: {
-        clientId: 'your-dev-client-id',
-        tenantId: 'your-dev-tenant-id',
-    },
-    QA: {
-        clientId: 'your-qa-client-id',
-        tenantId: 'your-qa-tenant-id',
-    },
-    PROD: {
-        clientId: 'your-prod-client-id',
-        tenantId: 'your-prod-tenant-id',
-    },
-};
-
-function App() {
-    const [environment, setEnvironment] = useState<Environment>('DEV');
-
-    const handleEnvironmentChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-        setEnvironment(event.target.value as Environment);
+    const initialize = async () => {
+        if (clientId && tenantId) {
+            const msalConfig: Configuration = {
+                auth: {
+                    clientId: clientId,
+                    authority: `https://login.microsoftonline.com/${tenantId}`,
+                    redirectUri: "http://localhost:5173",
+                },
+            };
+            const msalInstance = new PublicClientApplication(msalConfig);
+            await msalInstance.initialize();
+            setPca(msalInstance);
+        }
     };
 
-    const getMsalConfig = (environment: Environment): Configuration => {
-        const selectedEnv = environments[environment];
-        return {
-            auth: {
-                clientId: selectedEnv.clientId,
-                authority: `https://login.microsoftonline.com/${selectedEnv.tenantId}`,
-                redirectUri: 'http://localhost:5173/dashboard',
-            },
-        };
+    useEffect(() => {
+        if(clientId && tenantId && !pca) initialize();
+    }, [clientId, tenantId, pca, initialize]);
+
+    const handleLogin = async () => {
+        if (!clientId || !tenantId || !pca) return;
+
+        try {
+            const loginResponse: AuthenticationResult = await pca.loginPopup({
+                scopes: ["openid", "profile", "email"],
+            });
+
+            if (loginResponse.idToken) {
+                setIdToken(loginResponse.idToken);
+            }
+            if(loginResponse.accessToken) {
+                setAccessToken(loginResponse.accessToken);
+            }
+        } catch (error) {
+            console.error("Login failed:", error);
+            setIdToken("Error during login. Check console for details.");
+        }
     };
 
-    const handleLogin = () => {
-        const msalConfig = getMsalConfig(environment);
-        const msalInstance = new PublicClientApplication(msalConfig);
-        const loginRequest: RedirectRequest = {
-            scopes: ['user.read'],
-        };
+    const handleRefreshToken = async () => {
+        if (!pca) return;
 
-        msalInstance.loginRedirect(loginRequest).catch(e => {
-            console.error(e);
+        try {
+            const accounts = pca.getAllAccounts();
+
+            if (accounts.length === 0) {
+                setNewIdToken("No user account found. Please log in first.");
+                return;
+            }
+
+            const silentRequest: SilentRequest = {
+                scopes: ["openid", "profile", "email"],
+                account: accounts[0],
+            };
+
+            const silentResponse: AuthenticationResult = await pca.acquireTokenSilent(silentRequest);
+
+            if (silentResponse.idToken) {
+                setNewIdToken(silentResponse.idToken);
+            }
+        } catch (error) {
+            console.error("Failed to refresh ID token:", error);
+            setNewIdToken("Error while refreshing ID token. Check console for details.");
+        }
+    };
+
+    const copyToClipboard = (text: string) => {
+        navigator.clipboard.writeText(text).then(() => {
+            toast.success("Copied to clipboard");
+        }).catch(err => {
+            console.error("Failed to copy: ", err);
         });
     };
 
+    const theme = createTheme({
+        palette: {
+            primary: {
+                main: "#1E88E5",
+            },
+            secondary: {
+                main: "#00897B",
+            },
+        },
+    });
+
     return (
-        <MsalProvider instance={new PublicClientApplication(getMsalConfig(environment))}>
-            <Router>
-                <h1>WAV Modernization</h1>
-                <div className="card">
-                    <select value={environment} onChange={handleEnvironmentChange}>
-                        <option value="DEV">DEV</option>
-                        <option value="QA">QA</option>
-                        <option value="PROD">PROD</option>
-                    </select>
-                    <button onClick={handleLogin}>
-                        Login
-                    </button>
-                </div>
-                <Routes>
-                    <Route path="/dashboard" element={<Dashboard/>}/>
-                </Routes>
-            </Router>
-        </MsalProvider>
+
+            <ThemeProvider theme={theme}>
+                <Box
+                    sx={{
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        minHeight: "100vh",
+                        minWidth: "100vw",
+                        backgroundColor: "#f5f5f5",
+                        padding: 2,
+                    }}
+                >
+                    <Paper elevation={3} sx={{ padding: 4, width: "70%", textAlign: "center" }}>
+                        <Typography variant="h4" gutterBottom>
+                            Azure AD Authentication
+                        </Typography>
+                        <TextField
+                            label="Client ID"
+                            value={clientId}
+                            onChange={(e) => setClientId(e.target.value)}
+                            fullWidth
+                            margin="normal"
+                        />
+                        <TextField
+                            label="Tenant ID"
+                            value={tenantId}
+                            onChange={(e) => setTenantId(e.target.value)}
+                            fullWidth
+                            margin="normal"
+                        />
+                        <Button variant="contained" color="primary" onClick={handleLogin} sx={{ margin: 2 }}>
+                            Login with Azure AD
+                        </Button>
+                        <Button variant="contained" color="secondary" onClick={handleRefreshToken} sx={{ margin: 2 }}>
+                            Refresh ID Token
+                        </Button>
+                        <Grid container>
+                            <Grid size={3}>
+                                <Typography variant="h6" gutterBottom>
+                                    Access Token
+                                </Typography>
+                                <ToastContainer />
+                                <IconButton onClick={() => copyToClipboard(accessToken)}>
+                                    <ContentCopyIcon />
+                                </IconButton>
+                                <TextareaAutosize
+                                    minRows={16}
+                                    value={accessToken}
+                                    placeholder="Initial Access Token will appear here..."
+                                    style={{
+                                        width: "100%",
+                                        padding: "10px",
+                                        fontSize: "14px",
+                                        borderRadius: "4px",
+                                        border: "1px solid #ccc",
+                                        backgroundColor: "#f5f2f2",
+                                    }}
+                                    readOnly
+                                />
+                            </Grid>
+                            <Grid size={1}></Grid>
+                            <Grid size={3}>
+                                <Typography variant="h6" gutterBottom>
+                                    ID Token
+                                </Typography>
+                                <ToastContainer />
+                                <IconButton onClick={() => copyToClipboard(idToken)}>
+                                    <ContentCopyIcon />
+                                </IconButton>
+                                <TextareaAutosize
+                                    minRows={16}
+                                    value={idToken}
+                                    placeholder="Initial ID Token will appear here..."
+                                    style={{
+                                        width: "100%",
+                                        padding: "10px",
+                                        fontSize: "14px",
+                                        borderRadius: "4px",
+                                        border: "1px solid #ccc",
+                                        backgroundColor: "#f5f2f2",
+                                    }}
+                                    readOnly
+                                />
+                            </Grid>
+                            <Grid size={1}></Grid>
+                            <Grid size={3}>
+                                <Typography variant="h6" gutterBottom>
+                                    Refreshed ID Token
+                                </Typography>
+                                <IconButton onClick={() => copyToClipboard(newIdToken)}>
+                                    <ContentCopyIcon />
+                                </IconButton>
+                                <TextareaAutosize
+                                    minRows={16}
+                                    value={newIdToken}
+                                    placeholder="Refreshed ID Token will appear here..."
+                                    style={{
+                                        width: "100%",
+                                        padding: "10px",
+                                        fontSize: "14px",
+                                        borderRadius: "4px",
+                                        border: "1px solid #ccc",
+                                        backgroundColor: "#f5f2f2",
+                                    }}
+                                    readOnly
+                                />
+                            </Grid>
+                        </Grid>
+                    </Paper>
+                </Box>
+            </ThemeProvider>
+
     );
-}
+};
 
 export default App;
